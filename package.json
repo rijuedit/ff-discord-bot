@@ -1,7 +1,8 @@
+<CodeBlock language="json" editable>
 {
   "name": "ff-discord-bot",
   "version": "1.0.0",
-  "description": "Free Fire Discord Prefix Bot",
+  "description": "Free Fire Discord Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,3 +12,4 @@
     "dotenv": "^16.4.7"
   }
 }
+</CodeBlock>
