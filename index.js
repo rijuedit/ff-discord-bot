@@ -1,3 +1,4 @@
+
 require("dotenv").config();
 
 const {
@@ -15,11 +16,13 @@ const client = new Client({
 });
 
 const PREFIX = "!";
-const API_BASE = (process.env.FF_API_BASE_URL || "").replace(/\/+$/, "");
+
+const API_BASE = (process.env.FF_API_BASE_URL || "")
+  .replace(/\/+$/, "");
 
 client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log("✅ FF Discord Bot is ready!");
+  console.log(`Logged in as ${client.user.tag}`);
+  console.log("FF Discord Bot is ready!");
 });
 
 function makeEmbed(title, description, color = 0x00bfff) {
@@ -31,12 +34,19 @@ function makeEmbed(title, description, color = 0x00bfff) {
     .setTimestamp();
 }
 
+function valueOrNA(value) {
+  return value === undefined || value === null || value === ""
+    ? "N/A"
+    : String(value);
+}
+
 async function getPlayerInfo(uid, region) {
   if (!API_BASE || !process.env.FF_API_KEY) {
     throw new Error("API_SETUP_MISSING");
   }
 
   const url = new URL(`${API_BASE}/freefireinfo/bhau`);
+
   url.searchParams.set("uid", uid);
   url.searchParams.set("region", region);
   url.searchParams.set("key", process.env.FF_API_KEY);
@@ -54,7 +64,7 @@ async function getPlayerInfo(uid, region) {
   const data = await response.json();
 
   if (data.error) {
-    throw new Error(data.error);
+    throw new Error(String(data.error));
   }
 
   if (!data.basicInfo) {
@@ -64,17 +74,12 @@ async function getPlayerInfo(uid, region) {
   return data;
 }
 
-function rankValue(value) {
-  return value === undefined || value === null
-    ? "N/A"
-    : String(value);
-}
-
-async function handleInfo(message, uid, region = "BD") {
+async function handleInfo(message, uid, region) {
   await message.channel.sendTyping();
 
   try {
     const data = await getPlayerInfo(uid, region);
+
     const info = data.basicInfo;
     const clan = data.clanBasicInfo || {};
     const social = data.socialInfo || {};
@@ -84,56 +89,57 @@ async function handleInfo(message, uid, region = "BD") {
       .setColor(0x19c37d)
       .setTitle("🔥 FREE FIRE PLAYER INFO")
       .setDescription(
-        `**Nickname:** ${info.nickname || "Unknown"}\n` +
-        `**UID:** \`${info.accountId || uid}\`\n` +
-        `**Region:** ${info.region || region}`
+        `**Nickname:** ${valueOrNA(info.nickname)}\n` +
+        `**UID:** \`${valueOrNA(info.accountId || uid)}\`\n` +
+        `**Region:** ${valueOrNA(info.region || region)}`
       )
       .addFields(
         {
           name: "👤 ACCOUNT",
           value:
-            `Level: **${rankValue(info.level)}**\n` +
-            `EXP: **${rankValue(info.exp)}**\n` +
-            `Likes: **${rankValue(info.liked)}**\n` +
-            `Badges: **${rankValue(info.badgeCnt)}**`,
+            `Level: **${valueOrNA(info.level)}**\n` +
+            `EXP: **${valueOrNA(info.exp)}**\n` +
+            `Likes: **${valueOrNA(info.liked)}**\n` +
+            `Badges: **${valueOrNA(info.badgeCnt)}**`,
           inline: true
         },
         {
           name: "🏆 RANK",
           value:
-            `BR Rank: **${rankValue(info.rank)}**\n` +
-            `BR Points: **${rankValue(info.rankingPoints)}**\n` +
-            `CS Rank: **${rankValue(info.csRank)}**\n` +
-            `CS Points: **${rankValue(info.csRankingPoints)}**`,
+            `BR Rank: **${valueOrNA(info.rank)}**\n` +
+            `BR Points: **${valueOrNA(info.rankingPoints)}**\n` +
+            `CS Rank: **${valueOrNA(info.csRank)}**\n` +
+            `CS Points: **${valueOrNA(info.csRankingPoints)}**`,
           inline: true
         },
         {
           name: "🛡️ GUILD",
           value:
-            `Name: **${clan.clanName || "No data"}**\n` +
-            `Guild Level: **${rankValue(clan.clanLevel)}**\n` +
-            `Members: **${rankValue(clan.memberNum)}**`,
+            `Name: **${valueOrNA(clan.clanName)}**\n` +
+            `Level: **${valueOrNA(clan.clanLevel)}**\n` +
+            `Members: **${valueOrNA(clan.memberNum)}**`,
           inline: true
         },
         {
           name: "🐾 PET",
           value:
-            `Pet ID: **${rankValue(pet.id)}**\n` +
-            `Pet Level: **${rankValue(pet.level)}**`,
+            `Pet ID: **${valueOrNA(pet.id)}**\n` +
+            `Pet Level: **${valueOrNA(pet.level)}**`,
           inline: true
         },
         {
           name: "🌐 SOCIAL",
           value:
-            `Gender: **${String(social.gender || "N/A").replace("Gender_", "")}**\n` +
+            `Gender: **${valueOrNA(social.gender).replace("Gender_", "")}**\n` +
             `Signature: ${(social.signature || "N/A").slice(0, 300)}`,
           inline: false
         }
       )
-      .setFooter({ text: "FF Discord Bot • Data from API" })
+      .setFooter({ text: "FF Discord Bot • Player Info" })
       .setTimestamp();
 
     return message.reply({ embeds: [embed] });
+
   } catch (error) {
     console.error("Player Info error:", error.message);
 
@@ -141,21 +147,27 @@ async function handleInfo(message, uid, region = "BD") {
 
     if (error.message === "API_SETUP_MISSING") {
       reason =
-        "API সেট করা হয়নি। Render-এ FF_API_BASE_URL এবং FF_API_KEY যোগ করো।";
-    } else if (error.message === "Invalid UID or Region. Please check and try again.") {
+        "Render-এর Environment Variables-এ FF_API_BASE_URL এবং FF_API_KEY সেট করো।";
+    } else if (
+      error.message.toLowerCase().includes("invalid uid") ||
+      error.message.toLowerCase().includes("invalid region")
+    ) {
       reason = "UID অথবা Region সঠিক নয়।";
     } else if (error.message === "INVALID_API_RESPONSE") {
-      reason = "API থেকে প্রত্যাশিত Player Info পাওয়া যায়নি।";
+      reason = "API থেকে Player Info পাওয়া যায়নি।";
     } else if (error.message.startsWith("API_HTTP_")) {
       reason =
-        `API HTTP error (${error.message.replace("API_HTTP_", "")})। API Key বা endpoint পরীক্ষা করো।`;
-    } else if (error.name === "TimeoutError" || error.name === "AbortError") {
-      reason = "API response দিতে দেরি হচ্ছে। পরে আবার চেষ্টা করো।";
+        `API Error: HTTP ${error.message.replace("API_HTTP_", "")}. API URL ও Key পরীক্ষা করো।`;
+    } else if (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError"
+    ) {
+      reason = "API উত্তর দিতে দেরি হচ্ছে। একটু পরে আবার চেষ্টা করো।";
     }
 
     return message.reply({
       embeds: [
-        makeEmbed("❌ Player Info Error", reason, 0xff3333)
+        makeEmbed("❌ PLAYER INFO ERROR", reason, 0xff3333)
       ]
     });
   }
@@ -188,8 +200,7 @@ client.on("messageCreate", async (message) => {
           [
             "`!ping` — Bot status",
             "`!help` — Command list",
-            "`!info UID` — Player profile",
-            "`!info UID REGION` — Profile with region",
+            "`!info BD UID` — Player profile",
             "`!check UID` — Ban check (API not connected)",
             "`!duo UID` — Duo info (API not connected)",
             "`!freelike BD UID` — Like service (API not connected)"
@@ -199,46 +210,49 @@ client.on("messageCreate", async (message) => {
     });
   }
 
+  // Usage: !info BD 2579249340
   if (command === "info") {
-    const uid = args[0];
-    const region = (args[1] || "BD").toUpperCase();
+    const region = (args[0] || "").toUpperCase();
+    const uid = args[1];
 
-    if (!uid || !/^\d+$/.test(uid)) {
-      return message.reply("❗ ব্যবহার: `!info 2579249340 BD`");
-    }
-
-    if (!/^[A-Z]{2,5}$/.test(region)) {
-      return message.reply("❗ Region সঠিকভাবে দাও। উদাহরণ: `BD`");
+    if (!region || !uid || !/^[A-Z]{2,5}$/.test(region) || !/^\d+$/.test(uid)) {
+      return message.reply(
+        "❗ সঠিক ব্যবহার: `!info BD 2579249340`"
+      );
     }
 
     return handleInfo(message, uid, region);
   }
 
   if (command === "check") {
-    if (!args[0] || !/^\d+$/.test(args[0])) {
-      return message.reply("❗ ব্যবহার: `!check 18810639172`");
+    const uid = args[0];
+
+    if (!uid || !/^\d+$/.test(uid)) {
+      return message.reply("❗ ব্যবহার: `!check 2579249340`");
     }
 
     return message.reply({
       embeds: [
         makeEmbed(
-          "⚠️ Ban Check API দরকার",
-          "বর্তমানে Player Info API যুক্ত করা হয়েছে। Ban status চেক করার জন্য আলাদা Ban Check endpoint লাগবে।"
+          "⚠️ BAN CHECK API REQUIRED",
+          "Ban status চেক করতে আলাদা Ban Check API দরকার। এখনো এই ফিচারটি সংযুক্ত করা হয়নি।"
         )
       ]
     });
   }
 
   if (command === "duo") {
-    if (!args[0] || !/^\d+$/.test(args[0])) {
-      return message.reply("❗ ব্যবহার: `!duo 1439534081`");
+    const uid = args[0];
+
+    if (!uid || !/^\d+$/.test(uid)) {
+      return message.reply("❗ ব্যবহার: `!duo 2579249340`");
     }
 
     return message.reply({
       embeds: [
         makeEmbed(
-          "⚠️ Duo API দরকার",
-          "বর্তমান API ডকুমেন্টেশনে Duo partner তথ্যের endpoint দেওয়া নেই।"
+          "⚠️ DUO API REQUIRED",
+          "Duo partner-এর তথ্য দেখানোর জন্য উপযুক্ত API দরকার। এই ফিচারটি এখনো সংযুক্ত নয়।"
         )
       ]
     });
@@ -249,14 +263,16 @@ client.on("messageCreate", async (message) => {
     const uid = args[1];
 
     if (!region || !uid || !/^[A-Z]{2,5}$/.test(region) || !/^\d+$/.test(uid)) {
-      return message.reply("❗ ব্যবহার: `!freelike BD 2331990551`");
+      return message.reply(
+        "❗ ব্যবহার: `!freelike BD 2579249340`"
+      );
     }
 
     return message.reply({
       embeds: [
         makeEmbed(
-          "⚠️ Like API দরকার",
-          "এখনো কোনো Like API সংযুক্ত করা হয়নি। তাই বট কোনো লাইক পাঠায়নি।"
+          "⚠️ LIKE API REQUIRED",
+          "Like পাঠানোর API এখনো সংযুক্ত নয়। তাই বট এখনো কোনো Like পাঠায়নি।"
         )
       ]
     });
