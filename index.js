@@ -15,10 +15,11 @@ const client = new Client({
 });
 
 const PREFIX = "!";
+const API_BASE = (process.env.FF_API_BASE_URL || "").replace(/\/+$/, "");
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log("✅ Prefix commands are ready!");
+  console.log("✅ FF Discord Bot is ready!");
 });
 
 function makeEmbed(title, description, color = 0x00bfff) {
@@ -30,77 +31,131 @@ function makeEmbed(title, description, color = 0x00bfff) {
     .setTimestamp();
 }
 
-async function sendApiRequest(url, options = {}) {
-  if (!url) {
-    throw new Error("এই কমান্ডের API সেট করা নেই।");
+async function getPlayerInfo(uid, region) {
+  if (!API_BASE || !process.env.FF_API_KEY) {
+    throw new Error("API_SETUP_MISSING");
   }
+
+  const url = new URL(`${API_BASE}/freefireinfo/bhau`);
+  url.searchParams.set("uid", uid);
+  url.searchParams.set("region", region);
+  url.searchParams.set("key", process.env.FF_API_KEY);
 
   const response = await fetch(url, {
-    ...options,
-    headers: {
-      Accept: "application/json",
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(process.env.FF_API_KEY
-        ? { Authorization: `Bearer ${process.env.FF_API_KEY}` }
-        : {}),
-      ...options.headers
-    }
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(15000)
   });
 
-  const text = await response.text();
-
   if (!response.ok) {
-    throw new Error(`API error: HTTP ${response.status}`);
+    throw new Error(`API_HTTP_${response.status}`);
   }
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { result: text };
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(data.error);
   }
+
+  if (!data.basicInfo) {
+    throw new Error("INVALID_API_RESPONSE");
+  }
+
+  return data;
 }
 
-function formatData(data) {
-  if (typeof data === "string") return data;
-  return JSON.stringify(data, null, 2);
+function rankValue(value) {
+  return value === undefined || value === null
+    ? "N/A"
+    : String(value);
 }
 
-async function showApiResult(message, title, apiUrl, uid) {
-  if (!apiUrl) {
-    return message.reply({
-      embeds: [
-        makeEmbed(
-          "⚠️ API সেট করা নেই",
-          "এই কমান্ড চালাতে একটি কার্যকর API URL দরকার। Render-এর Environment Variables-এ API URL সেট করো।",
-          0xffa500
-        )
-      ]
-    });
-  }
+async function handleInfo(message, uid, region = "BD") {
+  await message.channel.sendTyping();
 
   try {
-    const url = apiUrl.replaceAll("{uid}", encodeURIComponent(uid));
-    const data = await sendApiRequest(url);
+    const data = await getPlayerInfo(uid, region);
+    const info = data.basicInfo;
+    const clan = data.clanBasicInfo || {};
+    const social = data.socialInfo || {};
+    const pet = data.petInfo || {};
 
-    const result = formatData(data);
-    const safeResult =
-      result.length > 3500 ? result.slice(0, 3500) + "\n..." : result;
+    const embed = new EmbedBuilder()
+      .setColor(0x19c37d)
+      .setTitle("🔥 FREE FIRE PLAYER INFO")
+      .setDescription(
+        `**Nickname:** ${info.nickname || "Unknown"}\n` +
+        `**UID:** \`${info.accountId || uid}\`\n` +
+        `**Region:** ${info.region || region}`
+      )
+      .addFields(
+        {
+          name: "👤 ACCOUNT",
+          value:
+            `Level: **${rankValue(info.level)}**\n` +
+            `EXP: **${rankValue(info.exp)}**\n` +
+            `Likes: **${rankValue(info.liked)}**\n` +
+            `Badges: **${rankValue(info.badgeCnt)}**`,
+          inline: true
+        },
+        {
+          name: "🏆 RANK",
+          value:
+            `BR Rank: **${rankValue(info.rank)}**\n` +
+            `BR Points: **${rankValue(info.rankingPoints)}**\n` +
+            `CS Rank: **${rankValue(info.csRank)}**\n` +
+            `CS Points: **${rankValue(info.csRankingPoints)}**`,
+          inline: true
+        },
+        {
+          name: "🛡️ GUILD",
+          value:
+            `Name: **${clan.clanName || "No data"}**\n` +
+            `Guild Level: **${rankValue(clan.clanLevel)}**\n` +
+            `Members: **${rankValue(clan.memberNum)}**`,
+          inline: true
+        },
+        {
+          name: "🐾 PET",
+          value:
+            `Pet ID: **${rankValue(pet.id)}**\n` +
+            `Pet Level: **${rankValue(pet.level)}**`,
+          inline: true
+        },
+        {
+          name: "🌐 SOCIAL",
+          value:
+            `Gender: **${String(social.gender || "N/A").replace("Gender_", "")}**\n` +
+            `Signature: ${(social.signature || "N/A").slice(0, 300)}`,
+          inline: false
+        }
+      )
+      .setFooter({ text: "FF Discord Bot • Data from API" })
+      .setTimestamp();
 
-    return message.reply({
-      embeds: [
-        makeEmbed(title, `**UID:** \`${uid}\`\n\`\`\`json\n${safeResult}\n\`\`\``)
-      ]
-    });
+    return message.reply({ embeds: [embed] });
   } catch (error) {
-    console.error(`${title} error:`, error.message);
+    console.error("Player Info error:", error.message);
+
+    let reason = "API থেকে তথ্য পাওয়া যায়নি। পরে আবার চেষ্টা করো।";
+
+    if (error.message === "API_SETUP_MISSING") {
+      reason =
+        "API সেট করা হয়নি। Render-এ FF_API_BASE_URL এবং FF_API_KEY যোগ করো।";
+    } else if (error.message === "Invalid UID or Region. Please check and try again.") {
+      reason = "UID অথবা Region সঠিক নয়।";
+    } else if (error.message === "INVALID_API_RESPONSE") {
+      reason = "API থেকে প্রত্যাশিত Player Info পাওয়া যায়নি।";
+    } else if (error.message.startsWith("API_HTTP_")) {
+      reason =
+        `API HTTP error (${error.message.replace("API_HTTP_", "")})। API Key বা endpoint পরীক্ষা করো।`;
+    } else if (error.name === "TimeoutError" || error.name === "AbortError") {
+      reason = "API response দিতে দেরি হচ্ছে। পরে আবার চেষ্টা করো।";
+    }
 
     return message.reply({
       embeds: [
-        makeEmbed(
-          "❌ API কাজ করেনি",
-          "API URL, API access বা UID চেক করো। API সঠিকভাবে সেট করা না থাকলে আসল তথ্য দেখানো সম্ভব নয়।",
-          0xff3333
-        )
+        makeEmbed("❌ Player Info Error", reason, 0xff3333)
       ]
     });
   }
@@ -110,82 +165,85 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.guild) return;
   if (!message.content.startsWith(PREFIX)) return;
 
-  const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const args = message.content
+    .slice(PREFIX.length)
+    .trim()
+    .split(/\s+/);
+
   const command = (args.shift() || "").toLowerCase();
 
-  // !help
-  if (command === "help") {
-    const embed = makeEmbed(
-      "📜 FF Bot Commands",
-      [
-        "`!check UID` — Free Fire ban status চেক",
-        "`!duo UID` — Duo তথ্য দেখানো",
-        "`!info UID` — অ্যাকাউন্টের তথ্য",
-        "`!freelike REGION UID` — Like API ব্যবহার",
-        "`!ping` — বট অনলাইন কি না",
-        "`!help` — কমান্ড লিস্ট"
-      ].join("\n")
-    );
-
-    return message.reply({ embeds: [embed] });
-  }
-
-  // !ping
   if (command === "ping") {
     return message.reply({
-      embeds: [makeEmbed("🏓 Pong!", "Bot is online!")]
+      embeds: [
+        makeEmbed("🏓 PONG!", "Bot is online and working! 🟢")
+      ]
     });
   }
 
-  // !check UID
-  if (command === "check") {
+  if (command === "help") {
+    return message.reply({
+      embeds: [
+        makeEmbed(
+          "📜 FF BOT COMMANDS",
+          [
+            "`!ping` — Bot status",
+            "`!help` — Command list",
+            "`!info UID` — Player profile",
+            "`!info UID REGION` — Profile with region",
+            "`!check UID` — Ban check (API not connected)",
+            "`!duo UID` — Duo info (API not connected)",
+            "`!freelike BD UID` — Like service (API not connected)"
+          ].join("\n")
+        )
+      ]
+    });
+  }
+
+  if (command === "info") {
     const uid = args[0];
+    const region = (args[1] || "BD").toUpperCase();
 
     if (!uid || !/^\d+$/.test(uid)) {
+      return message.reply("❗ ব্যবহার: `!info 2579249340 BD`");
+    }
+
+    if (!/^[A-Z]{2,5}$/.test(region)) {
+      return message.reply("❗ Region সঠিকভাবে দাও। উদাহরণ: `BD`");
+    }
+
+    return handleInfo(message, uid, region);
+  }
+
+  if (command === "check") {
+    if (!args[0] || !/^\d+$/.test(args[0])) {
       return message.reply("❗ ব্যবহার: `!check 18810639172`");
     }
 
-    return showApiResult(
-      message,
-      "🛡️ Free Fire Ban Check",
-      process.env.CHECK_API_URL,
-      uid
-    );
+    return message.reply({
+      embeds: [
+        makeEmbed(
+          "⚠️ Ban Check API দরকার",
+          "বর্তমানে Player Info API যুক্ত করা হয়েছে। Ban status চেক করার জন্য আলাদা Ban Check endpoint লাগবে।"
+        )
+      ]
+    });
   }
 
-  // !duo UID
   if (command === "duo") {
-    const uid = args[0];
-
-    if (!uid || !/^\d+$/.test(uid)) {
+    if (!args[0] || !/^\d+$/.test(args[0])) {
       return message.reply("❗ ব্যবহার: `!duo 1439534081`");
     }
 
-    return showApiResult(
-      message,
-      "🤝 Free Fire Duo Info",
-      process.env.DUO_API_URL,
-      uid
-    );
+    return message.reply({
+      embeds: [
+        makeEmbed(
+          "⚠️ Duo API দরকার",
+          "বর্তমান API ডকুমেন্টেশনে Duo partner তথ্যের endpoint দেওয়া নেই।"
+        )
+      ]
+    });
   }
 
-  // !info UID
-  if (command === "info") {
-    const uid = args[0];
-
-    if (!uid || !/^\d+$/.test(uid)) {
-      return message.reply("❗ ব্যবহার: `!info 7961652175`");
-    }
-
-    return showApiResult(
-      message,
-      "👤 Free Fire Account Info",
-      process.env.INFO_API_URL,
-      uid
-    );
-  }
-
-  // !freelike BD UID
   if (command === "freelike") {
     const region = (args[0] || "").toUpperCase();
     const uid = args[1];
@@ -194,52 +252,18 @@ client.on("messageCreate", async (message) => {
       return message.reply("❗ ব্যবহার: `!freelike BD 2331990551`");
     }
 
-    const apiUrl = process.env.LIKE_API_URL;
-
-    if (!apiUrl) {
-      return message.reply({
-        embeds: [
-          makeEmbed(
-            "⚠️ Like API সেট করা নেই",
-            "লাইক পাঠানোর জন্য কার্যকর API URL দরকার। API ছাড়া লাইক পাঠানো যাবে না।",
-            0xffa500
-          )
-        ]
-      });
-    }
-
-    try {
-      const data = await sendApiRequest(apiUrl, {
-        method: "POST",
-        body: JSON.stringify({ region, uid })
-      });
-
-      const result = formatData(data);
-      const safeResult =
-        result.length > 3000 ? result.slice(0, 3000) + "\n..." : result;
-
-      return message.reply({
-        embeds: [
-          makeEmbed(
-            "❤️ Free Fire Like API Result",
-            `**Region:** \`${region}\`\n**UID:** \`${uid}\`\n\n\`\`\`json\n${safeResult}\n\`\`\``
-          )
-        ]
-      });
-    } catch (error) {
-      console.error("Like API error:", error.message);
-
-      return message.reply({
-        embeds: [
-          makeEmbed(
-            "❌ Like API কাজ করেনি",
-            "API URL, API access এবং Region সঠিক আছে কি না চেক করো।",
-            0xff3333
-          )
-        ]
-      });
-    }
+    return message.reply({
+      embeds: [
+        makeEmbed(
+          "⚠️ Like API দরকার",
+          "এখনো কোনো Like API সংযুক্ত করা হয়নি। তাই বট কোনো লাইক পাঠায়নি।"
+        )
+      ]
+    });
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN).catch((error) => {
+  console.error("Discord login failed:", error.message);
+  process.exit(1);
+});
